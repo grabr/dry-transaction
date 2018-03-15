@@ -305,6 +305,69 @@ RSpec.describe "Transactions" do
     end
   end
 
+  context "failed in a step inside around" do
+    before do
+      class Test::ContainerAround
+        extend Dry::Container::Mixin
+        register :around_step,  -> input, &block { result = block.(Dry::Monads::Success(input)); result }
+        register :verify_step,   -> input { input[:name] == "Jane" ? Dry::Monads::Success(input) : Dry::Monads::Failure(input) }
+      end
+    end
+
+    let(:transaction) {
+      Class.new do
+        include Dry::Transaction(container: Test::ContainerAround)
+
+        around :around, with: :around_step
+        step :verify, with: :verify_step
+      end.new(**dependencies)
+    }
+
+    let(:input) { {"name" => "John"} }
+
+    it "returns a failure" do
+      expect(transaction.(input)).to be_a Dry::Monads::Result::Failure
+    end
+
+    it "supports matching on actual step failures" do
+      results = []
+
+      transaction.(input) do |m|
+        m.success {}
+
+        m.failure :verify do |value|
+          results << "Fail on verify step"
+        end
+
+        m.failure :around do |value|
+          results << "Fail on around step"
+        end
+      end
+
+      expect(results).to match_array(["Fail on verify step", "Fail on around step"])
+    end
+
+    it "supports matching on actual step failures inside around pattern-match" do
+      results = []
+
+      transaction.(input) do |m|
+        m.success {}
+
+        m.failure :around do |value|
+          ::Dry::Transaction::ResultMatcher.(Dry::Monads::Failure(value)) do |n|
+            n.success {}
+
+            n.failure :verify do |v|
+              results << "Fail on verify step inside around"
+            end
+          end
+        end
+      end
+
+      expect(results).to match_array(["Fail on verify step inside around"])
+    end
+  end
+
   context "failed in a raw step" do
     let(:input) { {"name" => "Jane", "email" => "jane@doe.com"} }
 
